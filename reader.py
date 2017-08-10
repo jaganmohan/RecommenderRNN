@@ -16,7 +16,6 @@ class Dataset(object):
 	self._batch_size = batch_size
 	self._users_seq_len = users_seq_len
 	self._items_seq_len = items_seq_len
-	self._emb_size = emb_size
 	self._max_seq_len = max(max(self._users_seq_len.values()),
 		 max(self._items_seq_len.values()))
         self.users_items_in_batches = None
@@ -24,28 +23,14 @@ class Dataset(object):
 	self._seq_lengths = None
 	self._targets = None
 	self._num_batches = None
-	self._u_seq_emb = None
-	self._i_seq_emb = None
 	self._order = None
 
-    @property
-    def __getuserseq__(self, u):
-	return (self._users_seq[u], self._users_seq_len[u])
+    def _getuserseq(self, u):
+	return self._users_seq[u], self._users_seq_len[u]
 
-    @property
-    def __getitemseq__(self, i):
+    def _getitemseq(self, i):
 	# shape of array _items_seq[i]: [sequence_length x 3]
-	return (self._items_seq[i], self._items_seq_len[i])
-
-    @property
-    def __getuserembseq__(self, u):
-	# list of shape: [self.emb_size+1 x sequence_length]
-	return self._u_seq_emb[u]
-
-    @property
-    def __getitemembseq__(self, i):
-	# list of shape: [self.emb_size+1 x sequence_length]
-	return self._i_seq_emb[i]
+	return self._items_seq[i], self._items_seq_len[i]
 
     @property
     def batch_size(self):
@@ -62,10 +47,6 @@ class Dataset(object):
     @property
     def num_items(self):
 	return self._num_items
-
-    @property
-    def emb_size(self):
-	return self._emb_size
 
     @property
     def max_seq_len(self):
@@ -95,21 +76,32 @@ class Dataset(object):
 	    raise BatchError("prepare_batches has not been called yet")
 	return self._targets
 
+    def clean_variables(self):
+        self._users_seq = None
+        self._items_seq = None
+        self._users_seq_len = None
+        self._items_seq_len = None
+        self.users_items_in_batches = None
+
     def assign_u_i_tobatches(self):
 	"""
 	Assining users and items as a pair to batches
 	shape of each batch: batch_size x 2
 	"""
-	users = self.users_seq.keys()
-	items = self.items_seq.keys()
+	users = self._users_seq.keys()
+	items = self._items_seq.keys()
 	u_i_batches = list()
+   	batch = np.zeros((self.batch_size,2), dtype=int)
+	idx = 0
 	for x in users:
-	    batch = np.zeros((2,self.batch_size), dtype=int)
-	    for y in range(0,len(items),self.batch_size):
-		_i = items[y:y+self.batch_size]
-		batch[0] = x
-		batch[1,:len(_i)] = _i
-		u_i_batches.append(batch)
+	    for _i in items:
+		batch[idx,0] = x
+		batch[idx,1] = _i
+		idx += 1
+		if idx == self.batch_size:
+		    u_i_batches.append(batch)
+		    batch = np.zeros((self.batch_size,2), dtype=int)
+		    idx = 0
 	return u_i_batches
 
     def convert_seq_to_embs(self, u_emb, i_emb):
@@ -138,44 +130,49 @@ class Dataset(object):
 	self._u_seq_emb = user_seq_emb
 	self._i_seq_emb = item_seq_emb
 
-    def prepare_batches(self, u_emb, i_emb):
+    def prepare_batches(self):
         """
            will try Mini-batching sequences into chunks in next version
            https://www-i6.informatik.rwth-aachen.de/publications/download/960/Doetsch-ICFHR-2014.pdf
         """
-	self.convert_seq_to_embs(u_emb, i_emb)
 	self.users_items_in_batches = self.assign_u_i_tobatches()
 	batches = list()
 	targets = list()
 	seq_lens = list()
 	for count, _b in enumerate(self.u_i_in_batch,1):
-	    u_seq = self.__getuserembseq__(_b[0,0])
-	    _u_s, _  = self.__getuserseq__(_b[0,0])
-	    _u_i_idx = np.zeros((self.batch_size,2))
+            batch = np.zeros((self.batch_size, 2, self.max_seq_len, 3))
+            target = np.zeros((self.batch_size, self.max_seq_len))
+            s_len = np.zeros((self.batch_size), dtype=int)
+	    # form the batch
 	    # get the indices of user and item in respective sequences
 	    # to send only that length sequence as input since further calculation
 	    # of remaining sequence is not required
-	    for idx,_i in enumerate(_b[1]):
-		_i_s, _ = self.__getitemseq__(_i)
-		_u_i_idx[idx,0] = np.where(_u_s[:,0], _i)
-		_u_i_idx[idx,1] = np.where(_i_s[:,0], _b[0,0])
-	    batch = np.zeros((self.batch_size, self.max_seq_len, 2, self.emb_size))
-	    target = np.zeros((self.batch_size, self.max_seq_len))
-	    s_len = np.zeros((self.batch_size), dtype=int)
-	    for idx, _i in enumerate(_b[1]):
-		m_s_len = np.max(_u_i_idx[idx])
-		batch[idx,-(_u_i_idx[idx,0]+m_s_len):,0] = u_seq[:_u_i_idx[idx,0]]
-		batch[idx,-(_u_i_idx[idx,1]+m_s_len):,1] = i_seq[:_u_i_idx[idx,1]]
-		target[idx,-m_s_len] = _u_s[_u_i_idx[idx,0],1]
+	    for idx,_u,_i in enumerate(_b):
+	      try:
+		_u_s, _  = self._getuserseq(_u)
+		_i_s, _ = self._getitemseq(_i)
+		_u_idx_i = int(np.where(_u_s[:,0]==_i)[0])
+		_i_idx_u = int(np.where(_i_s[:,0]==_u)[0])
+		m_s_len = np.max(_u_idx_i,_i_idx_u)
+		batch[idx,0,m_s_len-_u_idx_i:m_s_len,:] = _u_s[:_u_idx_i,:]
+		batch[idx,1,m_s_len-_i_idx_u:m_s_len,:] = _i_s[:_i_idx_u,:]
+		target[idx,-m_s_len] = _u_s[_u_idx_i,1]
 		s_len[idx] = max(m_s_len)
-	    batches.append(batch.reshape(self.batch_size, self.max_seq_len, 2 * 2 * self.emb_size))
+	      except ValueError:
+		print("user_seq", _u_s)
+		print("item_seq", _i_s)
+	    batches.append(batch)#.reshape(self.batch_size, self.max_seq_len, 2 * 2 * self.emb_size))
 	    seq_lens.append(s_len)
 	    targets.append(target)
+	    print("batch ",batch)
+	    print("targets ", target)
+	    print("s_lengths ", s_len)
 	self._order = range(count)
 	self._batches = batches
 	self._seq_lengths = seq_lens
 	self._targets = targets
 	self._num_batches = count
+	self.clean_variables()
 
     def iter_batches(self):
 	""" Iterates through batches """

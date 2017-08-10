@@ -18,11 +18,22 @@ class RecommenderRNN(object):
 	self._hidden_unit_size = hidden_size
 	# sort inputs for user_lstm and item_lstm
         # Placeholders for input data
-	self._inputs = tf.placeholder(dtype=tf.float32, shape=[batch_size, max_seq_len, inp_D * 2], name="inputs")
+	self._inputs = tf.placeholder(dtype=tf.float32, shape=[batch_size, 2, max_seq_len, 3], name="inputs")
 	self._targets = tf.placeholder(dtype=tf.float32, shape=[batch_size, max_seq_len], name="targets")
         self._seq_lengths = tf.placeholder(tf.int32, shape=[batch_size], name="seq_lengths")
 	self._u_emb = tf.placeholder(dtype=tf.float32, shape=[num_users, inp_D-1], name="u_emb")
 	self._i_emb = tf.placeholder(dtype=tf.float32, shape=[num_items, inp_D-1], name="i_emb")
+
+	# Variables for embedding sequences
+	u_emb_seq = tf.concat(
+		[tf.nn.embedding_lookup(self._u_emb, self._inputs[:,0,:,0]),self._inputs[:,0,:,2]], 3)
+	i_emb_seq = tf.concat(
+		[tf.nn.embedding_lookup(self._i_emb, self._inputs[:,1,:,0]),self._inputs[:,1,:,2]], 3)
+
+	print("u_emb_seq shape: ",u_emb_seq.shape)
+
+	inputs = tf.squeeze(tf.concat([u_emb_seq, i_emb_seq], 3))
+	print("inputs: ", inputs)
         
         # Recommender LSTM cell
         cell = RecommenderCell(hidden_size, batch_size, inp_D)
@@ -30,7 +41,7 @@ class RecommenderRNN(object):
         
         # Will try mini-batching in next version
   
-	outputs, final_state = tf.nn.dynamic_rnn(cell, self.inputs, sequence_length=self.seq_lengths, 
+	outputs, final_state = tf.nn.dynamic_rnn(cell, inputs, sequence_length=self.seq_lengths, 
                                initial_state=self._initial_state)
 	#shape(hid_state): [batch_size x seq_len x hidden_size]
 
