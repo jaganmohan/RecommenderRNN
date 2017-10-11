@@ -72,6 +72,7 @@ class NetflixParser(object):
 	print("Forming modified validation data...")
 	valid_data = list()
 	for i in _data:
+	  if i in train_data:
 	    valid_data.append(train_data[i])
 	    del train_data[i]
 	self._train_data = train_data.values()
@@ -90,7 +91,7 @@ def preprocess(parser, output_dir):
 	valid_data = parser._valid_data
 	# Relabeling users to remove gaps in user IDs
 	user2id = dict(zip(parser._users, range(1,len(parser._users)+1)))
-
+        #print(user2id)
 	## Creating sequences for training
 	print("Creating user and item sequences for training data...")
 	user_seq = collections.defaultdict(list)
@@ -103,17 +104,18 @@ def preprocess(parser, output_dir):
 	train_path_item = os.path.join(output_dir,"train","items.txt")
 	train_path_user = os.path.join(output_dir,"train","users.txt")
 	with open(train_path_item,"w") as ti, open(train_path_user,"w") as tu:
+            tu.write("{}\n".format(len(parser._users)))
 	    for uid in user2id.values():
-	        t = 1
-                tu.write("{},0,0,0,1,{}\n".format(uid,t))
-                t += 1
+	        #t = 1
+                #tu.write("{},0,0,0,1,{}\n".format(uid,t))
+                t = 1
 		for iid, r, ts in user_seq[uid]:
 		    tu.write("{},{},{},{},0,{}\n".format(uid,iid,r,ts,t))
 		    t += 1
 	    for iid in item_seq.keys():
+                #t = 1
+                #ti.write("{},0,0,0,1,{}\n".format(iid,t))
                 t = 1
-                ti.write("{},0,0,0,1,{}\n".format(iid,t))
-                t += 1
 		for uid, r, ts in item_seq[iid]:
 		    ti.write("{},{},{},{},0,{}\n".format(iid,uid,r,ts,t))
 		    t += 1 
@@ -131,17 +133,18 @@ def preprocess(parser, output_dir):
         valid_path_item = os.path.join(output_dir,"valid","items.txt")
         valid_path_user = os.path.join(output_dir,"valid","users.txt")
         with open(valid_path_item,"w") as vi, open(valid_path_user,"w") as vu:
+            vu.write("{}\n".format(len(parser._users)))
             for uid in user2id.values():
+                #t = 1
+                #vu.write("{},0,0,0,1,{}\n".format(uid,t))
                 t = 1
-                vu.write("{},0,0,0,1,{}\n".format(uid,t))
-                t += 1
                 for iid, r, ts in user_seq[uid]:
                     vu.write("{},{},{},{},0,{}\n".format(uid,iid,r,ts,t))
                     t += 1
             for iid in item_seq.keys():
+                #t = 1
+                #vi.write("{},0,0,0,1,{}\n".format(iid,t))
                 t = 1
-                vi.write("{},0,0,0,1,{}\n".format(iid,t))
-                t += 1
                 for uid, r, ts in item_seq[iid]:
                     vi.write("{},{},{},{},0,{}\n".format(iid,uid,r,ts,t))
                     t += 1

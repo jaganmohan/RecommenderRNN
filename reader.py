@@ -4,16 +4,18 @@ from __future__ import print_function
 import os
 import collections
 import numpy as np
+from math import ceil
 
 class Dataset(object):
 
     def __init__(self, users_seq, items_seq, users_seq_len,
-       items_seq_len, batch_size, emb_size):
+       items_seq_len, batch_size, chunk_size, emb_size, num_users):
         self._users_seq = users_seq
         self._items_seq = items_seq
-	self._num_users = len(users_seq)
+	self._num_users = int(num_users)
 	self._num_items = len(items_seq)
 	self._batch_size = batch_size
+        self._chunk_size = chunk_size
 	self._users_seq_len = users_seq_len
 	self._items_seq_len = items_seq_len
 	self._max_seq_len = max(max(self._users_seq_len.values()),
@@ -37,6 +39,10 @@ class Dataset(object):
 	return self._batch_size
 
     @property
+    def chunk_size(self):
+        return self._chunk_size
+
+    @property
     def u_i_in_batch(self):
 	return self.users_items_in_batches
 
@@ -51,6 +57,9 @@ class Dataset(object):
     @property
     def max_seq_len(self):
 	return self._max_seq_len
+    @max_seq_len.setter
+    def max_seq_len(self,max_seq_len):
+        self._max_seq_len = max_seq_len
 
     @property
     def iterorder(self):
@@ -77,10 +86,10 @@ class Dataset(object):
 	return self._targets
 
     def clean_variables(self):
-        self._users_seq = None
-        self._items_seq = None
-        self._users_seq_len = None
-        self._items_seq_len = None
+#        self._users_seq = None
+#        self._items_seq = None
+#        self._users_seq_len = None
+#        self._items_seq_len = None
         self.users_items_in_batches = None
 
     def assign_u_i_tobatches(self):
@@ -88,21 +97,29 @@ class Dataset(object):
 	Assining users and items as a pair to batches
 	shape of each batch: batch_size x 2
 	"""
+	print("[reader.py] Assigning user item indices to batches...")
 	users = self._users_seq.keys()
 	items = self._items_seq.keys()
-	u_i_batches = list()
+	np.random.shuffle(users)
+	np.random.shuffle(items)
+#	u_i_batches = list()
    	batch = np.zeros((self.batch_size,2), dtype=int)
 	idx = 0
 	for x in users:
+	    _u_s, _ = self._getuserseq(x)
 	    for _i in items:
-		batch[idx,0] = x
-		batch[idx,1] = _i
-		idx += 1
+		if _i in _u_s[:,0].astype(int):
+		    batch[idx,0] = x
+		    batch[idx,1] = _i
+		    idx += 1
 		if idx == self.batch_size:
-		    u_i_batches.append(batch)
+#		    u_i_batches.append(batch)
+		    yield batch
 		    batch = np.zeros((self.batch_size,2), dtype=int)
 		    idx = 0
-	return u_i_batches
+	if idx != 0:
+	    yield batch
+#	return u_i_batches
 
     def convert_seq_to_embs(self, u_emb, i_emb):
 	""" 
@@ -132,7 +149,6 @@ class Dataset(object):
 
     def prepare_batches(self):
         """
-           will try Mini-batching sequences into chunks in next version
            https://www-i6.informatik.rwth-aachen.de/publications/download/960/Doetsch-ICFHR-2014.pdf
         """
 	self.users_items_in_batches = self.assign_u_i_tobatches()
@@ -172,52 +188,69 @@ class Dataset(object):
 	self._seq_lengths = seq_lens
 	self._targets = targets
 	self._num_batches = count
-	self.clean_variables()
+#	self.clean_variables()
 
     def iter_batches(self):
 	""" Iterates through batches """
 	for i in self.iterorder:
 	    yield (self.batches[i], self.targets[i], self.seq_lengths[i])
 
-    def batch_preprocessing(self, u_emb, i_emb):
+    def batch_preprocessing(self):
 	"""
 	calls necessary prprocess methods
 	Not needed when prepare_batches is called directly
 	"""
-	self.convert_seq_to_embs(u_emb, i_emb)
+	#self.convert_seq_to_embs(u_emb, i_emb)
         self.users_items_in_batches = self.assign_u_i_tobatches()
 
     def prepare_and_iter_batches(self):
 	"""
 	Iterates through the batches
 	"""
-        for _b in self.u_i_in_batch:
-            u_seq = self.__getuserembseq__(_b[0,0])
-            _u_s, _  = self.__getuserseq__(_b[0,0])
-            _u_i_idx = np.zeros((self.batch_size,2))
+        # Iterates through chunks
+        def iter_chunks(batch, target, s_len, max_s_lens):
+            num_chunks = int(ceil(max(max_s_lens)/self.chunk_size))
+            for i in range(num_chunks):
+                t = i*self.batch_size
+                yield (batch[:,:,t:t+self.chunk_size,:],
+                        target[:,t:t+self.chunk_size], s_len[:,i])
+        # Iterates through batches
+        for _b in self.assign_u_i_tobatches():
+	    #print("forming batch {}".format(_b))
+            batch = np.zeros((self.batch_size, 2, self.max_seq_len, 3))
+            target = np.zeros((self.batch_size, self.max_seq_len))
+            s_len = np.zeros((self.batch_size, 
+                     int(ceil(self.max_seq_len/self.chunk_size))), dtype=int)
+            max_s_lens = np.zeros((self.batch_size), dtype=int)
+            # form the batch
             # get the indices of user and item in respective sequences
             # to send only that length sequence as input since further calculation
             # of remaining sequence is not required
-            for idx,_i in enumerate(_b[1]):
-                _i_s, _ = self.__getitemseq__(_i)
-                _u_i_idx[idx,0] = np.where(_u_s[:,0], _i)
-                _u_i_idx[idx,1] = np.where(_i_s[:,0], _b[0,0])
-	    # prepare each batch and send
-            batch = np.zeros((self.batch_size, self.max_seq_len, 2, self.emb_size))
-            target = np.zeros((self.batch_size, self.max_seq_len))
-            s_len = np.zeros((self.batch_size), dtype=int)
-            for idx, _i in enumerate(_b[1]):
-                m_s_len = np.max(_u_i_idx[idx])
-                batch[idx,-(_u_i_idx[idx,0]+m_s_len):,0] = u_seq[:_u_i_idx[idx,0]]
-                batch[idx,-(_u_i_idx[idx,1]+m_s_len):,1] = i_seq[:_u_i_idx[idx,1]]
-                target[idx,-m_s_len] = _u_s[_u_i_idx[idx,0],1]
-                s_len[idx] = max(m_s_len)
-            batch = batch.reshape(self.batch_size, self.max_seq_len, 2 * 2 * self.emb_size)
+            for idx,_cols in enumerate(_b):
+              try:
+                _u_s, _ = self._getuserseq(_cols[0])
+                _i_s, _ = self._getitemseq(_cols[1])
+                _u_idx_i = int(np.where(_u_s[:,0]==_cols[1])[0])
+                _i_idx_u = int(np.where(_i_s[:,0]==_cols[0])[0])
+                m_s_len = max(_u_idx_i+1,_i_idx_u+1)
+                batch[idx,0,m_s_len-_u_idx_i-1:m_s_len,:] = _u_s[:_u_idx_i+1,:]
+                batch[idx,1,m_s_len-_i_idx_u-1:m_s_len,:] = _i_s[:_i_idx_u+1,:]
+                target[idx,m_s_len-1] = _u_s[_u_idx_i,1]
+                max_s_lens[idx] = m_s_len
+                q,r = divmod(m_s_len,self.chunk_size)
+                s_len[idx,:q] = self.chunk_size
+                s_len[idx, q] = r
+              except TypeError as e:
+		print(e)
+		print(np.where(_u_s[:,0].astype(int)==_cols[1]))
+		print("Pass",_u_s[:,0],_cols[1])
+              except KeyError as e:
+                pass
+	    yield iter_chunks(batch, target, s_len, max_s_lens)	   
+ 
 
-	    yield (batch, target, s_len)
-	    
     @classmethod
-    def from_path(cls, path, bs, emb_size, mode="train"):
+    def from_path(cls, path, bs, cs, emb_size, mode="train"):
         users_seq = dict()
         items_seq = dict()
 	users_seq_len = dict()
@@ -229,9 +262,12 @@ class Dataset(object):
         with open(_path_item) as fi, open(_path_user) as fu:
             data_users = collections.defaultdict(list)
             data_items = collections.defaultdict(list)
-            for line in fu:
-                u, i, r, ts, n, t = line.strip().split(',')
-                data_users[u].append((t,i,r,ts))
+            for idx,line in enumerate(fu):
+                if idx == 0:
+                  num_users = line.strip();
+                else:
+                  u, i, r, ts, n, t = line.strip().split(',')
+                  data_users[u].append((t,i,r,ts))
             for line in fi:
                 i, u, r, ts, n, t = line.strip().split(',')
                 data_items[i].append((t,u,r,ts))
@@ -248,6 +284,7 @@ class Dataset(object):
 	del data_users
 	del data_items
 
+        print(num_users)
 	# Create and return Dataset object initialized with user and item sequence data
 	settings={
 	    "users_seq":users_seq,
@@ -255,6 +292,8 @@ class Dataset(object):
 	    "users_seq_len":users_seq_len,
             "items_seq_len":items_seq_len, 
 	    "batch_size":bs,
+            "chunk_size":cs,
 	    "emb_size":emb_size,
+            "num_users":num_users
 	}
         return cls(**settings)
