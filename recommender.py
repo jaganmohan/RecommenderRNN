@@ -57,14 +57,13 @@ class RecommenderRNN(object):
 	_out_i = tf.reshape(_out_i, [batch_size, chunk_size, hidden_size, 1])
         self._outputs = tf.squeeze(tf.matmul(_out_u, _out_i, transpose_a=True, name="_outputs"))
 
+        #if tf.count_nonzero(self._targets) == 0:
+        #outputs = tf.zeros(self._targets.shape)
+        #else:
         outputs = tf.one_hot(self._seq_lengths-1, chunk_size)
         self._outputs = tf.multiply(self._outputs, outputs)
 
 	# Back-propagating errors only for the last time step
-	# outputs[:len(outputs)-2] = 0
-	# _outputs = tf.zeros(tf.shape(outputs))
-	# _outputs[len(_outputs)-1] = outputs[len(outputs)-1] 
-
 	# Calculating loss
         # Need to check with reduction type None and change outputs to softmax instead of dotproduct
 	self._loss = tf.losses.mean_squared_error(self._targets, self._outputs)
@@ -75,12 +74,8 @@ class RecommenderRNN(object):
 
 	# Optimization for training
 	optimizer = tf.train.AdamOptimizer(learning_rate)
-	self._train_op = optimizer.minimize(self.loss)
+	self._train_op = optimizer.minimize(self._loss)
 
-	# Initializing embedding variables
-	#self._embeddings_reset = list()
-	#op = user_emb.assign()
-	#self._optimizer_reset.append(op)
 
     # Need to define necessary properties
     @property
@@ -140,18 +135,24 @@ def run_batch(sess, model, iterator, init_state):
     # shape(targets): [seq_len]
     # where D = shape[embedding,ts] or D = shape[embedding,1/0,ts]
     try:
-      for (inputs,targets,seq_lens) in iterator:
+      for idx, (inputs,targets,seq_lens) in enumerate(iterator):
         fetches = [model.loss, model.final_state, model.outputs, model.train_op]
         feed_dict = {}
         feed_dict[model.inputs] = inputs
         feed_dict[model.targets] = targets
         feed_dict[model.seq_lengths] = seq_lens
         feed_dict[model.initial_state] = state
-        errors, state, outputs, _ = sess.run(fetches, feed_dict)
+        if np.count_nonzero(targets) == 0:
+          fetches = [model.outputs, model.final_state]
+          outputs, state = sess.run(fetches, feed_dict)
+          errors = 0.0
+        else:
+          fetches = [model.loss, model.final_state, model.outputs, model.train_op]
+          errors, state, outputs, _ = sess.run(fetches, feed_dict)
         costs += errors
-#        print("targets {}".format(outputs))
-#        print("outputs {}".format(outputs))
-      return costs, state
+#        print(targets)
+#        print("chunk {} - {} - {}".format(idx,errors,outputs))
+      return costs, state#, outputs
     except Exception as e:
         print(e)
         #print("targets:",targets)
@@ -164,16 +165,17 @@ def run_epoch(sess, train_model, valid_model, train_iter, valid_iter):
     train_errors = list()
     valid_errors = list()
     print("Training model on train data")
-    for train in train_iter:
+    for idx, train in enumerate(train_iter):
 	state = sess.run(train_model.initial_state)
 	errors, state = run_batch(sess, train_model, train, state)
 	train_errors.append(errors)
+        print("[Training] : costs for batch {} - {}".format(idx,errors))
     print("Validating on probe data")
-    for valid in valid_iter:
+    for idx,valid in enumerate(valid_iter):
         state = sess.run(train_model.initial_state)
 	errors, state = run_batch(sess, valid_model, valid, state)
 	valid_errors.append(errors)
-
+        print("[Validation] : costs for batch {} - {}".format(idx,errors))
     return (np.nansum(train_errors), np.nansum(valid_errors))
 
 def main(args):
@@ -201,7 +203,7 @@ def main(args):
 
     emb_settings = {
 	"emb_size": args.input_emb_size-1, # decreasing to add time-component later
-	"num_samples": 100,
+	"num_samples": 10,
 	"batch_size": 20,
 	"learning_rate": 0.1,
 	"epoch": 20,
@@ -216,10 +218,10 @@ def main(args):
         tf.global_variables_initializer().run()
         # Create embeddings for user and item sequences and prepare batches
         print("Creating embeddings for users...")
-        u_emb_model.create_embeddings(sess)
+        #u_emb_model.create_embeddings(sess)
         u_emb = u_emb_model.embeddings
         print("Creating embeddings for items...")
-        i_emb_model.create_embeddings(sess)
+        #i_emb_model.create_embeddings(sess)
         i_emb = i_emb_model.embeddings
 
     settings = {
@@ -246,7 +248,8 @@ def main(args):
 
 	tf.global_variables_initializer().run()
 
-	for i in range(1, args.num_epochs+1):
+        with open("log.txt","w") as f:
+	  for i in range(1, args.num_epochs+1):
 	    # Train on random batches of data
 	    train_iter = train_data.prepare_and_iter_batches()
 	    valid_iter = valid_data.prepare_and_iter_batches()
@@ -254,8 +257,8 @@ def main(args):
 	    train_error, valid_error = run_epoch(sess, train_model, valid_model,
 			train_iter, valid_iter)
 
-	    print("[Epoch {}] Train RMSE: {:.3f}".format(i, train_error))
-	    print("[Epoch {}] Valid RMSE: {:.3f}".format(i, valid_error))
+	    f.write("[Epoch {}] Train RMSE: {:.3f}\n".format(i, train_error))
+	    f.write("[Epoch {}] Valid RMSE: {:.3f}\n".format(i, valid_error))
 
 
 def _parse_args():
@@ -264,15 +267,15 @@ def _parse_args():
     parser.add_argument("valid_path", help="path to validation data")
     parser.add_argument("--batch-size", type=int, default=10,
 	help="number of sequences processed in parallel")
-    parser.add_argument("--chunk-size", type=int, default=30,
+    parser.add_argument("--chunk-size", type=int, default=10,
         help="sequence window to be processed in each computation")
     parser.add_argument("--input-emb-size", type=int, default=20,
 	help="dimension of input features")
     parser.add_argument("--hidden-size", type=int, default=20,
 	help="number of hidden units in the RNN cell")
-    parser.add_argument("--learning-rate", type=float, default=0.01,
+    parser.add_argument("--learning-rate", type=float, default=0.05,
 	help="model learning rate")
-    parser.add_argument("--num-epochs", type=int, default=10,
+    parser.add_argument("--num-epochs", type=int, default=5,
 	help="number of epochs to learn")
     parser.add_argument("--verbose", action="store_true", default=False,
 	help="enable display of debugging messages")

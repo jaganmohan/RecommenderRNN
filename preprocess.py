@@ -96,9 +96,12 @@ def preprocess(parser, output_dir):
 	print("Creating user and item sequences for training data...")
 	user_seq = collections.defaultdict(list)
 	item_seq = collections.defaultdict(list)
-	for uid, iid, r, ts in sorted(train_data, key=lambda x:x[3]):
-	    user_seq[user2id[int(uid)]].append((int(iid),r,ts))
-	    item_seq[int(iid)].append((user2id[int(uid)],r,ts))
+        train_timeline = os.path.join(output_dir,"train","timeline.txt")
+        with open(train_timeline, "w") as f:
+	  for uid, iid, r, ts in sorted(train_data, key=lambda x:x[3]):
+	      user_seq[user2id[int(uid)]].append((int(iid),r,ts))
+	      item_seq[int(iid)].append((user2id[int(uid)],r,ts))
+              f.write("{},{},{},{}\n".format(user2id[int(uid)],int(iid),r,ts))
 	# Write out the sequences
 	print("Writing training data user and item sequences to files...")
 	train_path_item = os.path.join(output_dir,"train","items.txt")
@@ -124,10 +127,12 @@ def preprocess(parser, output_dir):
 	print("Creating user and item sequences for validation data...")
 	user_seq = collections.defaultdict(list)
         item_seq = collections.defaultdict(list)
-	print("valid_data ",valid_data[0])
-        for uid, iid, r, ts in sorted(valid_data, key=lambda x:x[3]):
-            user_seq[user2id[int(uid)]].append((int(iid),r,ts))
-            item_seq[int(iid)].append((user2id[int(uid)],r,ts))
+        valid_timeline = os.path.join(output_dir,"valid","timeline.txt")
+        with open(valid_timeline, "w") as f:
+          for uid, iid, r, ts in sorted(valid_data, key=lambda x:x[3]):
+              user_seq[user2id[int(uid)]].append((int(iid),r,ts))
+              item_seq[int(iid)].append((user2id[int(uid)],r,ts))
+              f.write("{},{},{},{}\n".format(user2id[int(uid)],int(iid),r,ts))
         # Write out the sequences
 	print("Writing validation data user and item sequences to files...")
         valid_path_item = os.path.join(output_dir,"valid","items.txt")
@@ -154,6 +159,8 @@ def preprocess(parser, output_dir):
 def main(args):
 	if args.which == "Netflix":
 	    parser = NetflixParser(args.path)
+	elif args.which == "Movielens":
+	    parser = MovielensParser(args.path)
 	else:
 	    raise RuntimeError("Unknown dataset!")
 	preprocess(parser, args.output_dir)
